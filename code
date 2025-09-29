@@ -1,0 +1,62 @@
+#более оптимизированныый код 
+
+import openpyxl
+import requests
+import pandas
+import time
+import warnings
+
+import gspread                                       # ← добавили
+from oauth2client.service_account import ServiceAccountCredentials
+from retry import retry                              # ← вместо retry_call
+from datetime import datetime
+import telebot
+
+warnings.filterwarnings("ignore", category=UserWarning)
+
+# === Инициализация вне цикла ===
+scope = ["https://spreadsheets.google.com/feeds",
+         "https://www.googleapis.com/auth/drive"]
+creds = ServiceAccountCredentials.from_json_keyfile_name("[ВАШ файл].json", scope)
+client = gspread.authorize(creds)
+sheet = client.open("ALL market").worksheet("binance[py]")
+
+bot = telebot.TeleBot('XXX')
+
+@retry(tries=5, delay=5, backoff=2)                   # ← теперь корректный декоратор
+def update_sheet(df):
+    sheet.clear()
+    sheet.update([df.columns.tolist()] + df.values.tolist())
+    sheet.update(range_name='G1',
+                 values=[[f"Last Modified: {datetime.now()}"]])
+
+counter = 0
+while True:
+    counter += 1
+
+    # 1) Получаем данные с Binance
+    data = requests.get("https://api1.binance.com/api/v3/ticker/24hr").json()
+
+    # 2) Пишем в Excel
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(['symbol','bidPrice','askPrice'])
+    for item in data:
+        ws.append([item['symbol'], item['bidPrice'], item['askPrice']])
+    wb.save('BinanceMarket.xlsx')
+
+    # 3) Читаем в DataFrame и обновляем Google Sheet
+    df = pandas.read_excel('BinanceMarket.xlsx')
+    try:
+        update_sheet(df)
+        print("Google Sheets updated")
+    except Exception as e:
+        print(f"Ошибка при обновлении Google Sheets: {e}")
+
+    # 4) Уведомление в Telegram
+    try:
+        bot.send_message(chat_id='-840798325', text=f'Market Binance обновлен  #{counter}')
+    except Exception as e:
+        print(f"Telegram error: {e}")
+
+    time.sleep(15)
